@@ -1,5 +1,7 @@
-use nilauth_client::client::{DefaultNilauthClient, NilauthClient};
-use nillion_chain_client::{client::NillionChainClient, key::NillionChainPrivateKey};
+use nilauth_client::{
+    client::{DefaultNilauthClient, NilauthClient},
+    nillion_chain_client::{client::NillionChainClient, key::NillionChainPrivateKey},
+};
 use nillion_nucs::k256::SecretKey;
 
 #[tokio::main]
