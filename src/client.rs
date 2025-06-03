@@ -5,14 +5,14 @@ use nillion_nucs::{
     builder::{ExtendTokenError, NucTokenBuildError, NucTokenBuilder},
     envelope::{InvalidSignature, NucEnvelopeParseError, NucTokenEnvelope},
     k256::{
-        ecdsa::{signature::Signer, Signature, SigningKey},
-        sha2::{Digest, Sha256},
         SecretKey,
+        ecdsa::{Signature, SigningKey, signature::Signer},
+        sha2::{Digest, Sha256},
     },
     token::{Did, ProofHash, TokenBody},
 };
 use reqwest::Response;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::json;
 use std::{fmt::Display, iter, time::Duration};
 use tokio::time::sleep;
