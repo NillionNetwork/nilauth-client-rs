@@ -1155,7 +1155,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "hex",
- "nillion-chain-client",
+ "nilchain-client",
  "nillion-nucs",
  "rand 0.8.5",
  "reqwest 0.12.19",
@@ -1167,9 +1167,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "nillion-chain-client"
+name = "nilchain-client"
 version = "0.1.0"
-source = "git+https://github.com/NillionNetwork/nilvm.git?rev=2c3792489920dd64233ac66f2611fb5f2ed830fd#2c3792489920dd64233ac66f2611fb5f2ed830fd"
+source = "git+https://github.com/NillionNetwork/nilchain-client-rs.git?rev=958674cd4d667632c469e2d210fb3b6e1867ab7c#958674cd4d667632c469e2d210fb3b6e1867ab7c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1177,7 +1177,6 @@ dependencies = [
  "cosmrs",
  "futures",
  "hex",
- "nillion-chain-transactions",
  "prost",
  "rand 0.8.5",
  "sha2 0.10.9",
@@ -1185,14 +1184,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "nillion-chain-transactions"
-version = "0.1.0"
-source = "git+https://github.com/NillionNetwork/nilvm.git?rev=2c3792489920dd64233ac66f2611fb5f2ed830fd#2c3792489920dd64233ac66f2611fb5f2ed830fd"
-dependencies = [
- "prost",
 ]
 
 [[package]]
