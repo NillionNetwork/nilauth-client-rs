@@ -1,6 +1,6 @@
 use nilauth_client::{
     client::{DefaultNilauthClient, NilauthClient},
-    nillion_chain_client::{client::NillionChainClient, key::NillionChainPrivateKey},
+    nilchain_client::{client::NillionChainClient, key::NillionChainPrivateKey},
 };
 use nillion_nucs::k256::SecretKey;
 

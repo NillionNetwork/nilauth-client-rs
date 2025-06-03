@@ -7,7 +7,7 @@ edition = "2021"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 hex = { version = "0.4", features = ["serde"] }
-nillion-chain-client = { git = "https://github.com/NillionNetwork/nilvm.git", rev = "2c3792489920dd64233ac66f2611fb5f2ed830fd" } 
+nilchain-client = { git = "https://github.com/NillionNetwork/nilchain-client-rs.git", rev = "958674cd4d667632c469e2d210fb3b6e1867ab7c" } 
 nillion-nucs = { git = "https://github.com/NillionNetwork/nuc-rs.git", rev = "687657acd08f2543e5c0d75e910eb9f1b1152d00" } 
 tracing = "0.1"
 rand = "0.8"

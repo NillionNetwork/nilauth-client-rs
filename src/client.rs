@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use nillion_chain_client::{client::NillionChainClient, transactions::TokenAmount};
+use nilchain_client::{client::NillionChainClient, transactions::TokenAmount};
 use nillion_nucs::{
     builder::{ExtendTokenError, NucTokenBuildError, NucTokenBuilder},
     envelope::{InvalidSignature, NucEnvelopeParseError, NucTokenEnvelope},
