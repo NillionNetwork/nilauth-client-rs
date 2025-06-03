@@ -7,14 +7,14 @@ edition = "2021"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 hex = { version = "0.4", features = ["serde"] }
-nillion-chain-client = { path = "../nillion-chain/client" }
-nillion-nucs = { path = "../nucs" }
+nillion-chain-client = { git = "https://github.com/NillionNetwork/nilvm.git", rev = "2c3792489920dd64233ac66f2611fb5f2ed830fd" } 
+nillion-nucs = { git = "https://github.com/NillionNetwork/nuc-rs.git", rev = "687657acd08f2543e5c0d75e910eb9f1b1152d00" } 
 tracing = "0.1"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "1"
+thiserror = "2"
 tokio = { version = "1.44", features = ["time"] }
 
 [dev-dependencies]
