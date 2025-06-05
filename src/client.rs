@@ -5,7 +5,7 @@ use nillion_nucs::{
     builder::{ExtendTokenError, NucTokenBuildError, NucTokenBuilder},
     envelope::{InvalidSignature, NucEnvelopeParseError, NucTokenEnvelope},
     k256::{
-        SecretKey,
+        PublicKey, SecretKey,
         ecdsa::{Signature, SigningKey, signature::Signer},
         sha2::{Digest, Sha256},
     },
@@ -14,7 +14,11 @@ use nillion_nucs::{
 use reqwest::Response;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::json;
-use std::{fmt::Display, iter, time::Duration};
+use std::{
+    fmt::{self, Display},
+    iter,
+    time::Duration,
+};
 use tokio::time::sleep;
 use tracing::warn;
 
@@ -38,23 +42,28 @@ pub trait NilauthClient {
     async fn about(&self) -> Result<About, AboutError>;
 
     /// Request a token for the given private key.
-    async fn request_token(&self, key: &SecretKey) -> Result<String, RequestTokenError>;
+    async fn request_token(&self, key: &SecretKey, blind_module: BlindModule) -> Result<String, RequestTokenError>;
 
     /// Pay for a subscription.
     async fn pay_subscription(
         &self,
         payments_client: &mut NillionChainClient,
         key: &SecretKey,
+        blind_module: BlindModule,
     ) -> Result<TxHash, PaySubscriptionError>;
 
     /// Get our subscription status.
-    async fn subscription_status(&self, key: &SecretKey) -> Result<Subscription, SubscriptionStatusError>;
+    async fn subscription_status(
+        &self,
+        key: &PublicKey,
+        blind_module: BlindModule,
+    ) -> Result<Subscription, SubscriptionStatusError>;
 
     /// Get the cost of a subscription.
-    async fn subscription_cost(&self) -> Result<TokenAmount, SubscriptionCostError>;
+    async fn subscription_cost(&self, blind_module: BlindModule) -> Result<TokenAmount, SubscriptionCostError>;
 
     /// Revoke a token.
-    async fn revoke_token(&self, token: &NucTokenEnvelope, key: &SecretKey) -> Result<(), RevokeTokenError>;
+    async fn revoke_token(&self, args: RevokeTokenArgs, key: &SecretKey) -> Result<(), RevokeTokenError>;
 
     /// Lookup whether a token is revoked.
     async fn lookup_revoked_tokens(
@@ -212,6 +221,26 @@ impl_from_request_error!(
     LookupRevokedTokensError
 );
 
+/// A nillion blind module.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BlindModule {
+    /// The nildb blind module.
+    NilDb,
+
+    /// The nilai blind module.
+    NilAi,
+}
+
+impl fmt::Display for BlindModule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NilDb => write!(f, "nildb"),
+            Self::NilAi => write!(f, "nilai"),
+        }
+    }
+}
+
 /// The default nilauth client that hits the actual service.
 pub struct DefaultNilauthClient {
     client: reqwest::Client,
@@ -269,12 +298,13 @@ impl NilauthClient for DefaultNilauthClient {
         self.get(&url).await
     }
 
-    async fn request_token(&self, key: &SecretKey) -> Result<String, RequestTokenError> {
+    async fn request_token(&self, key: &SecretKey, blind_module: BlindModule) -> Result<String, RequestTokenError> {
         let about = self.about().await?;
         let payload = CreateNucRequestPayload {
             nonce: rand::random(),
             expires_at: Utc::now() + TOKEN_REQUEST_EXPIRATION,
             target_public_key: about.public_key,
+            blind_module,
         };
         let request = SignedRequest::new(key, &payload)?;
         let url = self.make_url("/api/v1/nucs/create");
@@ -286,8 +316,9 @@ impl NilauthClient for DefaultNilauthClient {
         &self,
         payments_client: &mut NillionChainClient,
         key: &SecretKey,
+        blind_module: BlindModule,
     ) -> Result<TxHash, PaySubscriptionError> {
-        let subscription = self.subscription_status(key).await?;
+        let subscription = self.subscription_status(&key.public_key(), blind_module).await?;
         match subscription.details {
             Some(details) if details.renewable_at > Utc::now() => {
                 return Err(PaySubscriptionError::CannotRenewYet(details.renewable_at));
@@ -295,8 +326,9 @@ impl NilauthClient for DefaultNilauthClient {
             _ => (),
         };
         let about = self.about().await?;
-        let cost = self.subscription_cost().await?;
-        let payload = ValidatePaymentRequestPayload { nonce: rand::random(), service_public_key: about.public_key };
+        let cost = self.subscription_cost(blind_module).await?;
+        let payload =
+            ValidatePaymentRequestPayload { nonce: rand::random(), service_public_key: about.public_key, blind_module };
         let payload = serde_json::to_string(&payload)?;
         let hash = Sha256::digest(&payload);
         let tx_hash = payments_client
@@ -324,27 +356,31 @@ impl NilauthClient for DefaultNilauthClient {
         Err(PaySubscriptionError::PaymentValidation { tx_hash, payload })
     }
 
-    async fn subscription_status(&self, key: &SecretKey) -> Result<Subscription, SubscriptionStatusError> {
-        let payload =
-            SubscriptionStatusRequest { nonce: rand::random(), expires_at: Utc::now() + TOKEN_REQUEST_EXPIRATION };
-        let request = SignedRequest::new(key, &payload)?;
-        let url = self.make_url("/api/v1/subscriptions/status");
-        self.post(&url, &request).await
+    async fn subscription_status(
+        &self,
+        key: &PublicKey,
+        blind_module: BlindModule,
+    ) -> Result<Subscription, SubscriptionStatusError> {
+        let key = hex::encode(key.to_sec1_bytes());
+        let url = format!("/api/v1/subscriptions/status?blind_module={blind_module}&public_key={key}");
+        let url = self.make_url(&url);
+        self.get(&url).await
     }
 
-    async fn subscription_cost(&self) -> Result<TokenAmount, SubscriptionCostError> {
-        let url = self.make_url("/api/v1/payments/cost");
+    async fn subscription_cost(&self, blind_module: BlindModule) -> Result<TokenAmount, SubscriptionCostError> {
+        let url = format!("/api/v1/payments/cost?blind_module={blind_module}");
+        let url = self.make_url(&url);
         let response: Result<GetCostResponse, SubscriptionCostError> = self.get(&url).await;
         Ok(TokenAmount::Unil(response?.cost_unils))
     }
 
-    async fn revoke_token(&self, token: &NucTokenEnvelope, key: &SecretKey) -> Result<(), RevokeTokenError> {
+    async fn revoke_token(&self, args: RevokeTokenArgs, key: &SecretKey) -> Result<(), RevokeTokenError> {
         let about = self.about().await?;
-        let token = token.encode();
-        let auth_token = self.request_token(key).await?;
-        let auth_token = NucTokenEnvelope::decode(&auth_token)?.validate_signatures()?;
+        let RevokeTokenArgs { auth_token, revocable_token } = args;
+        let auth_token = auth_token.validate_signatures()?;
+        let revocable_token = revocable_token.encode();
         // SAFETY: this can't not be an object
-        let args = json!({"token": token}).as_object().cloned().expect("not an object");
+        let args = json!({ "token": revocable_token }).as_object().cloned().expect("not an object");
         let invocation = NucTokenBuilder::extending(auth_token)?
             .audience(Did::new(about.public_key))
             .body(TokenBody::Invocation(args))
@@ -366,6 +402,15 @@ impl NilauthClient for DefaultNilauthClient {
         let response: Result<LookupRevokedTokensResponse, LookupRevokedTokensError> = self.post(&url, &request).await;
         Ok(response?.revoked)
     }
+}
+
+/// The arguments to a request to revoke a token.
+pub struct RevokeTokenArgs {
+    /// The authentication token to use as a base to derive the invocation token.
+    pub auth_token: NucTokenEnvelope,
+
+    /// The token to be revoked.
+    pub revocable_token: NucTokenEnvelope,
 }
 
 /// A transaction hash.
@@ -437,6 +482,9 @@ struct CreateNucRequestPayload {
     // Our public key, to ensure this request can't be redirected to another authority service.
     #[serde(with = "hex::serde")]
     target_public_key: [u8; 33],
+
+    // The blind module this token is for.
+    blind_module: BlindModule,
 }
 
 #[derive(Debug, Deserialize)]
@@ -463,6 +511,9 @@ struct ValidatePaymentRequestPayload {
 
     #[serde(with = "hex::serde")]
     service_public_key: [u8; 33],
+
+    // The blind module this token is for.
+    blind_module: BlindModule,
 }
 
 #[derive(Debug, Deserialize)]
@@ -499,15 +550,6 @@ pub struct RequestError {
 
     /// The error code.
     pub error_code: String,
-}
-
-#[derive(Serialize)]
-struct SubscriptionStatusRequest {
-    #[serde(with = "hex::serde")]
-    nonce: [u8; 16],
-
-    #[serde(with = "chrono::serde::ts_seconds")]
-    expires_at: DateTime<Utc>,
 }
 
 #[derive(Deserialize)]
