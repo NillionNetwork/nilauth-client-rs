@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let key = SecretKey::random(&mut rand::thread_rng());
     let product = BlindModule::NilDb;
 
-    client.pay_subscription(&mut payer, &key, product).await?;
+    client.pay_subscription(&mut payer, &key.public_key(), product).await?;
     let token = client.request_token(&key, product).await?;
     println!("{token}");
     Ok(())

@@ -48,7 +48,7 @@ pub trait NilauthClient {
     async fn pay_subscription(
         &self,
         payments_client: &mut NillionChainClient,
-        key: &SecretKey,
+        public_key: &PublicKey,
         blind_module: BlindModule,
     ) -> Result<TxHash, PaySubscriptionError>;
 
@@ -315,10 +315,10 @@ impl NilauthClient for DefaultNilauthClient {
     async fn pay_subscription(
         &self,
         payments_client: &mut NillionChainClient,
-        key: &SecretKey,
+        public_key: &PublicKey,
         blind_module: BlindModule,
     ) -> Result<TxHash, PaySubscriptionError> {
-        let subscription = self.subscription_status(&key.public_key(), blind_module).await?;
+        let subscription = self.subscription_status(public_key, blind_module).await?;
         match subscription.details {
             Some(details) if details.renewable_at > Utc::now() => {
                 return Err(PaySubscriptionError::CannotRenewYet(details.renewable_at));
@@ -337,7 +337,7 @@ impl NilauthClient for DefaultNilauthClient {
             .map_err(|e| PaySubscriptionError::Payment(e.to_string()))?;
 
         let public_key =
-            key.public_key().to_sec1_bytes().as_ref().try_into().map_err(|_| PaySubscriptionError::InvalidPublicKey)?;
+            public_key.to_sec1_bytes().as_ref().try_into().map_err(|_| PaySubscriptionError::InvalidPublicKey)?;
         let url = self.make_url("/api/v1/payments/validate");
         let request =
             ValidatePaymentRequest { tx_hash: tx_hash.clone(), payload: payload.as_bytes().to_vec(), public_key };
