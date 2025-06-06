@@ -1,5 +1,5 @@
 use nilauth_client::{
-    client::{DefaultNilauthClient, NilauthClient},
+    client::{BlindModule, DefaultNilauthClient, NilauthClient},
     nilchain_client::{client::NillionChainClient, key::NillionChainPrivateKey},
 };
 use nillion_nucs::k256::SecretKey;
@@ -12,8 +12,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut payer = NillionChainClient::new("http://localhost:26648".to_string(), payment_key).await?;
     let client = DefaultNilauthClient::new("http://127.0.0.1:30921")?;
     let key = SecretKey::random(&mut rand::thread_rng());
-    client.pay_subscription(&mut payer, &key).await?;
-    let token = client.request_token(&key).await?;
+    let product = BlindModule::NilDb;
+
+    client.pay_subscription(&mut payer, &key.public_key(), product).await?;
+    let token = client.request_token(&key, product).await?;
     println!("{token}");
     Ok(())
 }
