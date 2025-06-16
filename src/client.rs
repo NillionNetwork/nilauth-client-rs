@@ -539,6 +539,7 @@ pub struct RevokedToken {
     pub token_hash: ProofHash,
 
     /// The timestamp at which the token was revoked.
+    #[serde(with = "chrono::serde::ts_seconds")]
     pub revoked_at: DateTime<Utc>,
 }
 
