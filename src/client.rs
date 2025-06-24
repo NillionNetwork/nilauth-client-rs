@@ -20,7 +20,7 @@ use std::{
     time::Duration,
 };
 use tokio::time::sleep;
-use tracing::warn;
+use tracing::{info, warn};
 
 const TOKEN_REQUEST_EXPIRATION: Duration = Duration::from_secs(60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -331,6 +331,8 @@ impl NilauthClient for DefaultNilauthClient {
             ValidatePaymentRequestPayload { nonce: rand::random(), service_public_key: about.public_key, blind_module };
         let payload = serde_json::to_string(&payload)?;
         let hash = Sha256::digest(&payload);
+        info!("Making payment using payload={}, digest={}", hex::encode(&payload), hex::encode(hash));
+
         let tx_hash = payments_client
             .pay_for_resource(cost, hash.to_vec())
             .await
