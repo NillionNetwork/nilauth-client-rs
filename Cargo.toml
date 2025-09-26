@@ -8,9 +8,9 @@ async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 hex = { version = "0.4", features = ["serde"] }
 nilchain-client = { git = "https://github.com/NillionNetwork/nilchain-client-rs.git", rev = "958674cd4d667632c469e2d210fb3b6e1867ab7c" }
-nillion-nucs = { git = "https://github.com/NillionNetwork/nuc-rs.git", rev = "687657acd08f2543e5c0d75e910eb9f1b1152d00" }
+nillion-nucs = { path = "../nuc-rs" }
 tracing = "0.1"
-rand = "0.9"
+rand = "0.8" # Leave at 0.8 to avoid `rand_core` conflicts with `k256` 0.13
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

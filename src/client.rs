@@ -2,14 +2,16 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use nilchain_client::{client::NillionChainClient, transactions::TokenAmount};
 use nillion_nucs::{
-    builder::{ExtendTokenError, NucTokenBuildError, NucTokenBuilder},
+    DidMethod, Keypair,
+    builder::{InvocationBuilder, NucTokenBuildError},
+    did::Did,
     envelope::{InvalidSignature, NucEnvelopeParseError, NucTokenEnvelope},
     k256::{
         PublicKey, SecretKey,
         ecdsa::{Signature, SigningKey, signature::Signer},
         sha2::{Digest, Sha256},
     },
-    token::{Did, ProofHash, TokenBody},
+    token::{ProofHash, TokenBody},
 };
 use reqwest::Response;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -163,8 +165,8 @@ pub enum RevokeTokenError {
     #[error("invalid signatures in token returned from nilauth: {0}")]
     InvalidAuthTokenSignatures(#[from] InvalidSignature),
 
-    #[error("cannot extend token returned from nilauth: {0}")]
-    AuthTokenNotDelegation(#[from] ExtendTokenError),
+    #[error("authentication token must be a delegation")]
+    AuthTokenNotDelegation,
 
     #[error("building invocation: {0}")]
     BuildInvocation(#[from] NucTokenBuildError),
@@ -258,7 +260,7 @@ impl DefaultNilauthClient {
         format!("{base_url}{path}")
     }
 
-    async fn parse_reponse<T, E>(response: Response) -> Result<T, E>
+    async fn parse_response<T, E>(response: Response) -> Result<T, E>
     where
         T: DeserializeOwned,
         E: From<reqwest::Error> + From<RequestError>,
@@ -278,7 +280,7 @@ impl DefaultNilauthClient {
         E: From<reqwest::Error> + From<RequestError>,
     {
         let response = self.client.post(url).json(&request).send().await?;
-        Self::parse_reponse(response).await
+        Self::parse_response(response).await
     }
 
     async fn get<O, E>(&self, url: &str) -> Result<O, E>
@@ -287,7 +289,7 @@ impl DefaultNilauthClient {
         E: From<reqwest::Error> + From<RequestError>,
     {
         let response = self.client.get(url).send().await?;
-        Self::parse_reponse(response).await
+        Self::parse_response(response).await
     }
 }
 
@@ -349,7 +351,7 @@ impl NilauthClient for DefaultNilauthClient {
             match response {
                 Ok(_) => return Ok(tx_hash),
                 Err(PaySubscriptionError::Request(e)) if e.error_code == TX_RETRY_ERROR_CODE => {
-                    warn!("Server could not validate payment, retyring in {delay:?}");
+                    warn!("Server could not validate payment, retrying in {delay:?}");
                     sleep(*delay).await;
                 }
                 Err(e) => return Err(e),
@@ -377,21 +379,32 @@ impl NilauthClient for DefaultNilauthClient {
     }
 
     async fn revoke_token(&self, args: RevokeTokenArgs, key: &SecretKey) -> Result<(), RevokeTokenError> {
+        let signer = Keypair::from_bytes(key.to_bytes().as_ref()).signer(DidMethod::Key);
         let about = self.about().await?;
         let RevokeTokenArgs { auth_token, revocable_token } = args;
+
+        // The auth token's signatures must be validated before use.
         let auth_token = auth_token.validate_signatures()?;
+
+        // Manually check that we are extending a delegation token, as the new
+        // `InvocationBuilder` does not perform this check.
+        if !matches!(auth_token.token().token().body, TokenBody::Delegation(_)) {
+            return Err(RevokeTokenError::AuthTokenNotDelegation);
+        }
+
         let revocable_token = revocable_token.encode();
-        // SAFETY: this can't not be an object
-        let args = json!({ "token": revocable_token }).as_object().cloned().expect("not an object");
-        let invocation = NucTokenBuilder::extending(auth_token)?
-            .audience(Did::new(about.public_key))
-            .body(TokenBody::Invocation(args))
+
+        let invocation = InvocationBuilder::extending(auth_token)
+            .audience(Did::key(about.public_key))
             .command(["nuc", "revoke"])
-            .build(&key.into())?;
+            .arguments(json!({ "token": revocable_token }))
+            .sign_and_serialize(&signer)
+            .await?;
+
         let header_value = format!("Bearer {invocation}");
         let url = self.make_url("/api/v1/revocations/revoke");
         let response = self.client.post(url).header("Authorization", header_value).send().await?;
-        Self::parse_reponse(response).await
+        Self::parse_response(response).await
     }
 
     async fn lookup_revoked_tokens(
