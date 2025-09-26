@@ -3,9 +3,9 @@ use chrono::{DateTime, Utc};
 use nilchain_client::{client::NillionChainClient, transactions::TokenAmount};
 use nillion_nucs::{
     DidMethod, Keypair,
-    builder::{InvocationBuilder, NucTokenBuildError},
+    builder::InvocationBuilder,
     did::Did,
-    envelope::{InvalidSignature, NucEnvelopeParseError, NucTokenEnvelope},
+    envelope::NucTokenEnvelope,
     k256::{
         PublicKey, SecretKey,
         ecdsa::{Signature, SigningKey, signature::Signer},
@@ -16,13 +16,17 @@ use nillion_nucs::{
 use reqwest::Response;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::json;
-use std::{
-    fmt::{self, Display},
-    iter,
-    time::Duration,
-};
+use std::{iter, time::Duration};
 use tokio::time::sleep;
 use tracing::{info, warn};
+
+pub use crate::{
+    error::{
+        AboutError, LookupRevokedTokensError, PaySubscriptionError, RequestError, RequestTokenError, RevokeTokenError,
+        SigningError, SubscriptionCostError, SubscriptionStatusError,
+    },
+    models::{About, BlindModule, RevokeTokenArgs, RevokedToken, Subscription, TxHash},
+};
 
 const TOKEN_REQUEST_EXPIRATION: Duration = Duration::from_secs(60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -72,175 +76,6 @@ pub trait NilauthClient {
         &self,
         envelope: &NucTokenEnvelope,
     ) -> Result<Vec<RevokedToken>, LookupRevokedTokensError>;
-}
-
-/// An error when requesting a token.
-#[derive(Debug, thiserror::Error)]
-pub enum RequestTokenError {
-    #[error("fetching server's about: {0}")]
-    About(#[from] AboutError),
-
-    #[error("signing request: {0}")]
-    Signing(#[from] SigningError),
-
-    #[error("http: {0}")]
-    Http(#[from] reqwest::Error),
-
-    #[error("request: {0:?}")]
-    Request(RequestError),
-}
-
-/// An error when paying a subscription.
-#[derive(Debug, thiserror::Error)]
-pub enum PaySubscriptionError {
-    #[error("fetching server's about: {0}")]
-    About(#[from] AboutError),
-
-    #[error("fetching subscription cost: {0}")]
-    Cost(#[from] SubscriptionCostError),
-
-    #[error("fetching subscription status: {0}")]
-    Status(#[from] SubscriptionStatusError),
-
-    #[error("serde: {0}")]
-    Serde(#[from] serde_json::Error),
-
-    #[error("invalid public key")]
-    InvalidPublicKey,
-
-    #[error("http: {0}")]
-    Http(#[from] reqwest::Error),
-
-    #[error("making payment: {0}")]
-    Payment(String),
-
-    #[error("server could not validate payment: {tx_hash}")]
-    PaymentValidation { tx_hash: TxHash, payload: String },
-
-    #[error("cannot renew subscription before {0}")]
-    CannotRenewYet(DateTime<Utc>),
-
-    #[error("request: {0:?}")]
-    Request(RequestError),
-}
-
-/// An error when fetching the subscription status.
-#[derive(Debug, thiserror::Error)]
-pub enum SubscriptionStatusError {
-    #[error("fetching server's about: {0}")]
-    About(#[from] AboutError),
-
-    #[error("http: {0}")]
-    Http(#[from] reqwest::Error),
-
-    #[error("signing request: {0}")]
-    Signing(#[from] SigningError),
-
-    #[error("request: {0:?}")]
-    Request(RequestError),
-}
-
-/// An error when fetching the subscription cost.
-#[derive(Debug, thiserror::Error)]
-pub enum SubscriptionCostError {
-    #[error("http: {0}")]
-    Http(#[from] reqwest::Error),
-
-    #[error("request: {0:?}")]
-    Request(RequestError),
-}
-
-/// An error when revoking a token.
-#[derive(Debug, thiserror::Error)]
-pub enum RevokeTokenError {
-    #[error("fetching server's about: {0}")]
-    About(#[from] AboutError),
-
-    #[error("requesting token: {0}")]
-    RequestToken(#[from] RequestTokenError),
-
-    #[error("malformed token returned from nilauth: {0}")]
-    MalformedAuthToken(#[from] NucEnvelopeParseError),
-
-    #[error("invalid signatures in token returned from nilauth: {0}")]
-    InvalidAuthTokenSignatures(#[from] InvalidSignature),
-
-    #[error("authentication token must be a delegation")]
-    AuthTokenNotDelegation,
-
-    #[error("building invocation: {0}")]
-    BuildInvocation(#[from] NucTokenBuildError),
-
-    #[error("http: {0}")]
-    Http(#[from] reqwest::Error),
-
-    #[error("request: {0:?}")]
-    Request(RequestError),
-}
-
-/// An error when requesting the information about a nilauth instance.
-#[derive(Debug, thiserror::Error)]
-pub enum AboutError {
-    #[error("http: {0}")]
-    Http(#[from] reqwest::Error),
-
-    #[error("request: {0:?}")]
-    Request(RequestError),
-}
-
-/// An error when looking up revoked tokens.
-#[derive(Debug, thiserror::Error)]
-pub enum LookupRevokedTokensError {
-    #[error("http: {0}")]
-    Http(#[from] reqwest::Error),
-
-    #[error("request: {0:?}")]
-    Request(RequestError),
-}
-
-// implement `From<RequestError>` for a list of types.
-macro_rules! impl_from_request_error {
-    ($t:ty) => {
-        impl From<RequestError> for $t {
-            fn from(e: RequestError) -> Self {
-                Self::Request(e)
-            }
-        }
-    };
-    ($t:ty, $($rest:ty),+) => {
-        impl_from_request_error!($t);
-        impl_from_request_error!($($rest),+);
-    };
-}
-
-impl_from_request_error!(
-    RequestTokenError,
-    PaySubscriptionError,
-    SubscriptionStatusError,
-    SubscriptionCostError,
-    RevokeTokenError,
-    AboutError,
-    LookupRevokedTokensError
-);
-
-/// A nillion blind module.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum BlindModule {
-    /// The nildb blind module.
-    NilDb,
-
-    /// The nilai blind module.
-    NilAi,
-}
-
-impl fmt::Display for BlindModule {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NilDb => write!(f, "nildb"),
-            Self::NilAi => write!(f, "nilai"),
-        }
-    }
 }
 
 /// The default nilauth client that hits the actual service.
@@ -419,33 +254,6 @@ impl NilauthClient for DefaultNilauthClient {
     }
 }
 
-/// The arguments to a request to revoke a token.
-pub struct RevokeTokenArgs {
-    /// The authentication token to use as a base to derive the invocation token.
-    pub auth_token: NucTokenEnvelope,
-
-    /// The token to be revoked.
-    pub revocable_token: NucTokenEnvelope,
-}
-
-/// A transaction hash.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TxHash(pub String);
-
-impl Display for TxHash {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// Information about a nilauth server.
-#[derive(Clone, Deserialize)]
-pub struct About {
-    /// The server's public key.
-    #[serde(with = "hex::serde")]
-    pub public_key: [u8; 33],
-}
-
 #[derive(Serialize)]
 struct SignedRequest {
     #[serde(with = "hex::serde")]
@@ -471,16 +279,6 @@ impl SignedRequest {
         let request = Self { public_key, signature: signature.to_bytes().into(), payload: payload.into_bytes() };
         Ok(request)
     }
-}
-
-/// An error when signing a request.
-#[derive(Debug, thiserror::Error)]
-pub enum SigningError {
-    #[error("payload serialization: {0}")]
-    PayloadSerde(#[from] serde_json::Error),
-
-    #[error("invalid public key")]
-    InvalidPublicKey,
 }
 
 #[derive(Serialize)]
@@ -545,46 +343,4 @@ struct LookupRevokedTokensRequest {
 #[derive(Deserialize)]
 struct LookupRevokedTokensResponse {
     revoked: Vec<RevokedToken>,
-}
-
-/// A revoked token.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-pub struct RevokedToken {
-    /// The token hash.
-    pub token_hash: ProofHash,
-
-    /// The timestamp at which the token was revoked.
-    #[serde(with = "chrono::serde::ts_seconds")]
-    pub revoked_at: DateTime<Utc>,
-}
-
-/// An error when performing a request.
-#[derive(Clone, Debug, Deserialize)]
-pub struct RequestError {
-    /// The error message.
-    pub message: String,
-
-    /// The error code.
-    pub error_code: String,
-}
-
-#[derive(Deserialize)]
-pub struct Subscription {
-    /// Whether the user is actively subscribed.
-    pub subscribed: bool,
-
-    /// The details about the subscription.
-    pub details: Option<SubscriptionDetails>,
-}
-
-/// The subscription information.
-#[derive(Deserialize)]
-pub struct SubscriptionDetails {
-    /// The timestamp at which the subscription expires.
-    #[serde(with = "chrono::serde::ts_seconds")]
-    pub expires_at: DateTime<Utc>,
-
-    /// The timestamp at which the subscription can be renewed.
-    #[serde(with = "chrono::serde::ts_seconds")]
-    pub renewable_at: DateTime<Utc>,
 }
