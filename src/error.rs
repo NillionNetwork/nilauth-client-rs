@@ -13,8 +13,8 @@ pub enum RequestTokenError {
     #[error("fetching server's about: {0}")]
     About(#[from] AboutError),
 
-    #[error("signing request: {0}")]
-    Signing(#[from] SigningError),
+    #[error("building invocation: {0}")]
+    BuildInvocation(#[from] NucTokenBuildError),
 
     #[error("http: {0}")]
     Http(#[from] reqwest::Error),
@@ -26,6 +26,9 @@ pub enum RequestTokenError {
 /// An error when paying a subscription.
 #[derive(Debug, thiserror::Error)]
 pub enum PaySubscriptionError {
+    #[error("building invocation: {0}")]
+    BuildInvocation(#[from] NucTokenBuildError),
+
     #[error("fetching server's about: {0}")]
     About(#[from] AboutError),
 
