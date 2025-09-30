@@ -1,17 +1,20 @@
-# nilauth-client-rs
+# NilAuth Rust Client
 
-A rust crate to interact with [nilauth](https://github.com/NillionNetwork/nilauth), a service that allows 
-[Nillion](https://nillion.com) blind modules to interact with each other.
+A Rust client for interacting with [nilauth](https://github.com/NillionNetwork/nilauth), a service that manages blind module subscriptions and mints NUC tokens for the [Nillion Network](https://nillion.com).
 
-# Examples
+## Getting Started
 
-See the [examples](examples) directory for examples on how to use this crate.
+If you're new to the library, the best place to start is the **[Usage Documentation](./DOCUMENTATION.md)**, which provides a complete guide to the Payer/Subscriber model and API usage.
 
-# Contributing
+## Getting Help
 
-In order to contribute, install [Rust](https://www.rust-lang.org/) and ensure all tests and lints pass by running:
+- [Create an Issue](https://github.com/NillionNetwork/nilauth/issues/new/choose)
+- [Join our Discord](https://discord.com/invite/nillionnetwork)
 
-```bash
-cargo test
-cargo clippy
-```
+## Contributing
+
+We welcome contributions to the project! Please see the [Contributing Guide](./CONTRIBUTING.md) for details on how to get started.
+
+## License
+
+This project is licensed under the [MIT License](./LICENSE).

@@ -61,6 +61,7 @@ pub struct RevokedToken {
     pub revoked_at: DateTime<Utc>,
 }
 
+/// Represents the status of a user's subscription.
 #[derive(Deserialize)]
 pub struct Subscription {
     /// Whether the user is actively subscribed.

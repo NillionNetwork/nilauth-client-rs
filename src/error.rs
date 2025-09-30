@@ -23,7 +23,7 @@ pub enum RequestTokenError {
     Request(RequestError),
 }
 
-/// An error when paying a subscription.
+/// An error when paying for a subscription.
 #[derive(Debug, thiserror::Error)]
 pub enum PaySubscriptionError {
     #[error("building invocation: {0}")]
@@ -114,7 +114,7 @@ pub enum RevokeTokenError {
     Request(RequestError),
 }
 
-/// An error when requesting the information about a nilauth instance.
+/// An error when requesting information about a nilauth instance.
 #[derive(Debug, thiserror::Error)]
 pub enum AboutError {
     #[error("http: {0}")]

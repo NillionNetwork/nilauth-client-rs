@@ -42,10 +42,16 @@ pub trait NilauthClient {
     /// Get information about the nilauth instance.
     async fn about(&self) -> Result<About, AboutError>;
 
-    /// Request a token for the given private key.
+    /// Request a root Nuc for a blind module.
+    ///
+    /// This action must be performed by the **Subscriber**. It will fail if the
+    /// subscriber's `Did` does not have an active subscription.
     async fn request_token(&self, keypair: &Keypair, blind_module: BlindModule) -> Result<String, RequestTokenError>;
 
-    /// Pay for a subscription.
+    /// Pay for a blind module subscription.
+    ///
+    /// This action must be performed by the **Payer**. The payment is credited to the
+    /// `subscriber_did`. The payer and subscriber can be the same identity.
     async fn pay_subscription(
         &self,
         payments_client: &mut NillionChainClient,
@@ -182,7 +188,7 @@ impl NilauthClient for DefaultNilauthClient {
         let request = ValidatePaymentRequest { tx_hash: tx_hash_str.clone(), payload };
         let tx_hash = TxHash(tx_hash_str);
 
-        // Authenticate the validation request with the Payer's identity NUC.
+        // Authenticate the validation request with the Payer's identity Nuc.
         let invocation =
             create_identity_nuc(payer_keypair, Did::key(about.public_key), ["payments", "validate"]).await?;
         let auth_header = format!("Bearer {invocation}");
@@ -322,7 +328,7 @@ struct LookupRevokedTokensResponse {
     revoked: Vec<RevokedToken>,
 }
 
-/// Creates a self-signed identity NUC for authenticating a request.
+/// Creates a self-signed identity Nuc for authenticating a request.
 async fn create_identity_nuc<const N: usize>(
     keypair: &Keypair,
     audience: Did,
