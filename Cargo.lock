@@ -2334,7 +2334,7 @@ dependencies = [
 [[package]]
 name = "nillion-nucs"
 version = "1.0.0-rc.0"
-source = "git+https://github.com/NillionNetwork/nuc-rs?rev=0b88fc98fbf9e355d6aad9dadd3cb04e8d42c28f#0b88fc98fbf9e355d6aad9dadd3cb04e8d42c28f"
+source = "git+https://github.com/NillionNetwork/nuc-rs?rev=7ff05a5c6a8cb4247ea9c616a9bde4f9ab4e4cf6#7ff05a5c6a8cb4247ea9c616a9bde4f9ab4e4cf6"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
