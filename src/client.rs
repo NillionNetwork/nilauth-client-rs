@@ -140,7 +140,8 @@ impl NilauthClient for DefaultNilauthClient {
     async fn request_token(&self, keypair: &Keypair, blind_module: BlindModule) -> Result<String, RequestTokenError> {
         let about = self.about().await?;
 
-        let invocation = create_identity_nuc(keypair, Did::key(about.public_key), ["nuc", "create"]).await?;
+        let invocation =
+            create_identity_nuc(keypair, Did::key(about.public_key), ["nil", "auth", "nucs", "create"]).await?;
 
         let header_value = format!("Bearer {invocation}");
         let url = self.make_url("/api/v1/nucs/create");
@@ -190,7 +191,8 @@ impl NilauthClient for DefaultNilauthClient {
 
         // Authenticate the validation request with the Payer's identity Nuc.
         let invocation =
-            create_identity_nuc(payer_keypair, Did::key(about.public_key), ["payments", "validate"]).await?;
+            create_identity_nuc(payer_keypair, Did::key(about.public_key), ["nil", "auth", "payments", "validate"])
+                .await?;
         let auth_header = format!("Bearer {invocation}");
 
         for delay in PAYMENT_TX_RETRIES {
