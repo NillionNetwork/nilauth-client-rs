@@ -2334,7 +2334,7 @@ dependencies = [
 [[package]]
 name = "nillion-nucs"
 version = "1.0.0-rc.0"
-source = "git+https://github.com/NillionNetwork/nuc-rs?rev=7ff05a5c6a8cb4247ea9c616a9bde4f9ab4e4cf6#7ff05a5c6a8cb4247ea9c616a9bde4f9ab4e4cf6"
+source = "git+https://github.com/NillionNetwork/nuc-rs?rev=ce02d1f262a2ac28db98fbb54dbabe1235fd1ecc#ce02d1f262a2ac28db98fbb54dbabe1235fd1ecc"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3281,7 +3281,7 @@ dependencies = [
  "once_cell",
  "ring 0.17.14",
  "rustls-pki-types",
- "rustls-webpki 0.103.6",
+ "rustls-webpki 0.103.7",
  "subtle",
  "zeroize",
 ]
@@ -3329,9 +3329,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.6"
+version = "0.103.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8572f3c2cb9934231157b45499fc41e1f58c589fdfb81a844ba873265e80f8eb"
+checksum = "e10b3f4191e8a80e6b43eebabfac91e5dcecebb27a71f04e820c47ec41d314bf"
 dependencies = [
  "ring 0.17.14",
  "rustls-pki-types",
@@ -4439,9 +4439,9 @@ dependencies = [
 
 [[package]]
 name = "typenum"
-version = "1.18.0"
+version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dccffe3ce07af9386bfd29e80c0ab1a8205a2fc34e4bcd40364df902cfa8f3f"
+checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 
 [[package]]
 name = "uint"
