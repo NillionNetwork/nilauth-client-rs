@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use nilchain_client::{client::NillionChainClient, transactions::TokenAmount};
 use nillion_nucs::{
-    DidMethod, Keypair,
+    NucSigner,
     builder::{InvocationBuilder, NucTokenBuildError},
     did::Did,
     envelope::NucTokenEnvelope,
@@ -46,7 +46,11 @@ pub trait NilauthClient {
     ///
     /// This action must be performed by the **Subscriber**. It will fail if the
     /// subscriber's `Did` does not have an active subscription.
-    async fn request_token(&self, keypair: &Keypair, blind_module: BlindModule) -> Result<String, RequestTokenError>;
+    async fn request_token(
+        &self,
+        signer: &dyn NucSigner,
+        blind_module: BlindModule,
+    ) -> Result<String, RequestTokenError>;
 
     /// Pay for a blind module subscription.
     ///
@@ -56,11 +60,11 @@ pub trait NilauthClient {
         &self,
         payments_client: &mut NillionChainClient,
         blind_module: BlindModule,
-        payer_keypair: &Keypair,
+        payer_signer: &dyn NucSigner,
         subscriber_did: Did,
     ) -> Result<TxHash, PaySubscriptionError>;
 
-    /// Get our subscription status.
+    /// Get the subscription status for a given `Did`.
     async fn subscription_status(
         &self,
         did: Did,
@@ -71,22 +75,23 @@ pub trait NilauthClient {
     async fn subscription_cost(&self, blind_module: BlindModule) -> Result<TokenAmount, SubscriptionCostError>;
 
     /// Revoke a token.
-    async fn revoke_token(&self, args: RevokeTokenArgs, keypair: &Keypair) -> Result<(), RevokeTokenError>;
+    async fn revoke_token(&self, args: RevokeTokenArgs, signer: &dyn NucSigner) -> Result<(), RevokeTokenError>;
 
-    /// Lookup whether a token is revoked.
+    /// Looks up which tokens in a Nuc token envelope have been revoked.
     async fn lookup_revoked_tokens(
         &self,
         envelope: &NucTokenEnvelope,
     ) -> Result<Vec<RevokedToken>, LookupRevokedTokensError>;
 }
 
-/// The default nilauth client that hits the actual service.
+/// The default implementation of `NilauthClient` that interacts with a `nilauth` service over HTTP.
 pub struct DefaultNilauthClient {
     client: reqwest::Client,
     base_url: String,
 }
 
 impl DefaultNilauthClient {
+    /// Creates a new `DefaultNilauthClient`.
     pub fn new(base_url: impl Into<String>) -> Result<Self, reqwest::Error> {
         let client = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build()?;
         Ok(Self { client, base_url: base_url.into() })
@@ -137,11 +142,15 @@ impl NilauthClient for DefaultNilauthClient {
         self.get(&url).await
     }
 
-    async fn request_token(&self, keypair: &Keypair, blind_module: BlindModule) -> Result<String, RequestTokenError> {
+    async fn request_token(
+        &self,
+        signer: &dyn NucSigner,
+        blind_module: BlindModule,
+    ) -> Result<String, RequestTokenError> {
         let about = self.about().await?;
 
         let invocation =
-            create_identity_nuc(keypair, Did::key(about.public_key), ["nil", "auth", "nucs", "create"]).await?;
+            create_identity_nuc(signer, Did::key(about.public_key), ["nil", "auth", "nucs", "create"]).await?;
 
         let header_value = format!("Bearer {invocation}");
         let url = self.make_url("/api/v1/nucs/create");
@@ -156,7 +165,7 @@ impl NilauthClient for DefaultNilauthClient {
         &self,
         payments_client: &mut NillionChainClient,
         blind_module: BlindModule,
-        payer_keypair: &Keypair,
+        payer_signer: &dyn NucSigner,
         subscriber_did: Did,
     ) -> Result<TxHash, PaySubscriptionError> {
         let subscription = self.subscription_status(subscriber_did, blind_module).await?;
@@ -172,7 +181,7 @@ impl NilauthClient for DefaultNilauthClient {
             service_public_key: about.public_key,
             nonce: rand::random(),
             blind_module,
-            payer_did: payer_keypair.to_did(DidMethod::Key),
+            payer_did: *payer_signer.did(),
             subscriber_did,
         };
 
@@ -191,7 +200,7 @@ impl NilauthClient for DefaultNilauthClient {
 
         // Authenticate the validation request with the Payer's identity Nuc.
         let invocation =
-            create_identity_nuc(payer_keypair, Did::key(about.public_key), ["nil", "auth", "payments", "validate"])
+            create_identity_nuc(payer_signer, Did::key(about.public_key), ["nil", "auth", "payments", "validate"])
                 .await?;
         let auth_header = format!("Bearer {invocation}");
 
@@ -235,7 +244,7 @@ impl NilauthClient for DefaultNilauthClient {
         Ok(TokenAmount::Unil(response?.cost_unils))
     }
 
-    async fn revoke_token(&self, args: RevokeTokenArgs, keypair: &Keypair) -> Result<(), RevokeTokenError> {
+    async fn revoke_token(&self, args: RevokeTokenArgs, signer: &dyn NucSigner) -> Result<(), RevokeTokenError> {
         let about = self.about().await?;
         let RevokeTokenArgs { auth_token, revocable_token } = args;
 
@@ -251,11 +260,11 @@ impl NilauthClient for DefaultNilauthClient {
         let token_to_revoke = revocable_token.encode();
 
         let invocation = InvocationBuilder::extending(auth_token)
-            .subject(keypair.to_did(DidMethod::Key))
+            .subject(*signer.did())
             .audience(Did::key(about.public_key))
             .command(["nuc", "revoke"])
             .arguments(json!({ "token": token_to_revoke }))
-            .sign_and_serialize(&keypair.signer(DidMethod::Key))
+            .sign_and_serialize(signer)
             .await
             .map_err(|e| {
                 warn!("Failed to revoke token from revocable token={:?}", e);
@@ -280,19 +289,26 @@ impl NilauthClient for DefaultNilauthClient {
     }
 }
 
+/// The request body for creating a Nuc.
 #[derive(Serialize)]
 struct CreateNucRequest {
+    /// The blind module to create a Nuc for.
     blind_module: BlindModule,
 }
 
+/// The response body for a Nuc creation request.
 #[derive(Debug, Deserialize)]
 struct CreateNucResponse {
+    /// The serialized root Nuc token.
     token: String,
 }
 
+/// The request body for validating a payment.
 #[derive(Serialize)]
 struct ValidatePaymentRequest {
+    /// The on-chain transaction hash for the payment.
     tx_hash: String,
+    /// The payload that was hashed and included in the on-chain transaction.
     payload: OnChainPaymentPayload,
 }
 
@@ -306,7 +322,7 @@ struct OnChainPaymentPayload {
     /// A random value to ensure the hash of this payload is unique
     #[serde(with = "hex::serde")]
     nonce: [u8; 16],
-    /// The nillion blind module being subscribe to.
+    /// The nillion blind module being subscribed to.
     blind_module: BlindModule,
     /// The user paying for the subscription.
     payer_did: Did,
@@ -314,32 +330,32 @@ struct OnChainPaymentPayload {
     subscriber_did: Did,
 }
 
+/// The response body for the subscription cost endpoint.
 #[derive(Debug, Deserialize)]
 struct GetCostResponse {
-    // The cost in unils.
+    /// The cost in unils.
     cost_unils: u64,
 }
 
+/// The request body for looking up revoked tokens.
 #[derive(Serialize)]
 struct LookupRevokedTokensRequest {
+    /// The list of token hashes to check.
     hashes: Vec<ProofHash>,
 }
 
+/// The response body for a revoked token lookup.
 #[derive(Deserialize)]
 struct LookupRevokedTokensResponse {
+    /// The list of tokens that were found to be revoked.
     revoked: Vec<RevokedToken>,
 }
 
 /// Creates a self-signed identity Nuc for authenticating a request.
 async fn create_identity_nuc<const N: usize>(
-    keypair: &Keypair,
+    signer: &dyn NucSigner,
     audience: Did,
     command: [&str; N],
 ) -> Result<String, NucTokenBuildError> {
-    InvocationBuilder::new()
-        .subject(keypair.to_did(DidMethod::Key))
-        .audience(audience)
-        .command(command)
-        .sign_and_serialize(&keypair.signer(DidMethod::Key))
-        .await
+    InvocationBuilder::new().subject(*signer.did()).audience(audience).command(command).sign_and_serialize(signer).await
 }
