@@ -1,6 +1,6 @@
 # NilAuth Rust Client
 
-A Rust client for interacting with [nilauth](https://github.com/NillionNetwork/nilauth), a service that manages blind module subscriptions and mints NUC tokens for the [Nillion Network](https://nillion.com).
+A Rust client for interacting with [nilauth](https://github.com/NillionNetwork/nilauth), a service that manages blind module subscriptions and mints Nuc tokens for the [Nillion Network](https://nillion.com).
 
 ## Getting Started
 
