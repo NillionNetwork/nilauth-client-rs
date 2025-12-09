@@ -1,6 +1,6 @@
+//! Client for interacting with the Nilauth service.
+
 use async_trait::async_trait;
-use chrono::Utc;
-use nilchain_client::{client::NillionChainClient, transactions::TokenAmount};
 use nillion_nucs::{
     NucSigner,
     builder::{InvocationBuilder, NucTokenBuildError},
@@ -18,10 +18,10 @@ use tracing::{info, warn};
 
 pub use crate::{
     error::{
-        AboutError, LookupRevokedTokensError, PaySubscriptionError, RequestError, RequestTokenError, RevokeTokenError,
-        SigningError, SubscriptionCostError, SubscriptionStatusError,
+        AboutError, LookupRevokedTokensError, PaymentResourceError, RequestError, RequestTokenError, RevokeTokenError,
+        SubscriptionCostError, SubscriptionStatusError, ValidatePaymentError,
     },
-    models::{About, BlindModule, RevokeTokenArgs, RevokedToken, Subscription, TxHash},
+    models::{About, BlindModule, RevokeTokenArgs, RevokedToken, Subscription, SubscriptionDetails, TxHash},
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -36,11 +36,35 @@ static PAYMENT_TX_RETRIES: &[Duration] = &[
     Duration::from_secs(10),
 ];
 
+/// The result of creating a payment resource.
+///
+/// This contains the digest (hash) to be sent on-chain and the payload
+/// to be used for validation after the transaction is confirmed.
+#[derive(Debug, Clone)]
+pub struct PaymentResource {
+    /// The SHA-256 hash of the canonical JSON payload.
+    /// This should be sent as the `digest` parameter to the BurnWithDigest contract.
+    pub digest: [u8; 32],
+
+    /// The payload that was hashed. This must be sent to `validate_payment`
+    /// after the on-chain transaction is confirmed.
+    pub payload: OnChainPaymentPayload,
+}
+
 /// An interface to interact with nilauth.
 #[async_trait]
 pub trait NilauthClient {
     /// Get information about the nilauth instance.
     async fn about(&self) -> Result<About, AboutError>;
+
+    /// Get the nilauth service's public key.
+    fn public_key(&self) -> [u8; 33];
+
+    /// Get the nilauth service's DID.
+    fn did(&self) -> Did;
+
+    /// Get the configured chain ID.
+    fn chain_id(&self) -> u64;
 
     /// Request a root Nuc for a blind module.
     ///
@@ -52,17 +76,37 @@ pub trait NilauthClient {
         blind_module: BlindModule,
     ) -> Result<String, RequestTokenError>;
 
-    /// Pay for a blind module subscription.
+    /// Create a payment resource for a subscription.
     ///
-    /// This action must be performed by the **Payer**. The payment is credited to the
-    /// `subscriber_did`. The payer and subscriber can be the same identity.
-    async fn pay_subscription(
+    /// This is the first step in the decoupled payment flow. The returned `PaymentResource`
+    /// contains the digest to be sent on-chain and the payload to be used for validation.
+    ///
+    /// # Arguments
+    /// * `blind_module` - The blind module to subscribe to
+    /// * `payer_did` - The DID of the identity paying for the subscription
+    /// * `subscriber_did` - The DID of the identity receiving the subscription
+    fn create_payment_resource(
         &self,
-        payments_client: &mut NillionChainClient,
         blind_module: BlindModule,
-        payer_signer: &dyn NucSigner,
+        payer_did: Did,
         subscriber_did: Did,
-    ) -> Result<TxHash, PaySubscriptionError>;
+    ) -> PaymentResource;
+
+    /// Validate a payment transaction with the nilauth service.
+    ///
+    /// This is the final step in the decoupled payment flow. Call this after the
+    /// on-chain BurnWithDigest transaction has been confirmed.
+    ///
+    /// # Arguments
+    /// * `tx_hash` - The transaction hash from the on-chain payment
+    /// * `payload` - The payload returned by `create_payment_resource`
+    /// * `payer_signer` - The signer of the identity that paid for the subscription
+    async fn validate_payment(
+        &self,
+        tx_hash: &str,
+        payload: &OnChainPaymentPayload,
+        payer_signer: &dyn NucSigner,
+    ) -> Result<(), ValidatePaymentError>;
 
     /// Get the subscription status for a given `Did`.
     async fn subscription_status(
@@ -71,8 +115,8 @@ pub trait NilauthClient {
         blind_module: BlindModule,
     ) -> Result<Subscription, SubscriptionStatusError>;
 
-    /// Get the cost of a subscription.
-    async fn subscription_cost(&self, blind_module: BlindModule) -> Result<TokenAmount, SubscriptionCostError>;
+    /// Get the cost of a subscription in unils.
+    async fn subscription_cost(&self, blind_module: BlindModule) -> Result<u64, SubscriptionCostError>;
 
     /// Revoke a token.
     async fn revoke_token(&self, args: RevokeTokenArgs, signer: &dyn NucSigner) -> Result<(), RevokeTokenError>;
@@ -88,13 +132,30 @@ pub trait NilauthClient {
 pub struct DefaultNilauthClient {
     client: reqwest::Client,
     base_url: String,
+    public_key: [u8; 33],
+    did: Did,
+    chain_id: u64,
 }
 
 impl DefaultNilauthClient {
-    /// Creates a new `DefaultNilauthClient`.
-    pub fn new(base_url: impl Into<String>) -> Result<Self, reqwest::Error> {
-        let client = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build()?;
-        Ok(Self { client, base_url: base_url.into() })
+    /// Creates a new `DefaultNilauthClient` by fetching the service's public key.
+    ///
+    /// This is an async factory method that fetches the `/about` endpoint to get
+    /// the service's public key, which is required for building authentication tokens.
+    ///
+    /// # Arguments
+    /// * `base_url` - The base URL of the nilauth service
+    /// * `chain_id` - The Ethereum chain ID for payment validation
+    pub async fn create(base_url: impl Into<String>, chain_id: u64) -> Result<Self, AboutError> {
+        let base_url = base_url.into();
+        let client = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build().map_err(AboutError::Http)?;
+
+        // Fetch the service's public key
+        let url = format!("{base_url}/about");
+        let response = client.get(&url).send().await.map_err(AboutError::Http)?;
+        let about: About = Self::parse_response_static::<About, AboutError>(response).await?;
+
+        Ok(Self { client, base_url, public_key: about.public_key, did: Did::key(about.public_key), chain_id })
     }
 
     fn make_url(&self, path: &str) -> String {
@@ -102,7 +163,7 @@ impl DefaultNilauthClient {
         format!("{base_url}{path}")
     }
 
-    async fn parse_response<T, E>(response: Response) -> Result<T, E>
+    async fn parse_response_static<T, E>(response: Response) -> Result<T, E>
     where
         T: DeserializeOwned,
         E: From<reqwest::Error> + From<RequestError>,
@@ -115,6 +176,14 @@ impl DefaultNilauthClient {
         }
     }
 
+    async fn parse_response<T, E>(&self, response: Response) -> Result<T, E>
+    where
+        T: DeserializeOwned,
+        E: From<reqwest::Error> + From<RequestError>,
+    {
+        Self::parse_response_static(response).await
+    }
+
     async fn post<R, O, E>(&self, url: &str, request: &R) -> Result<O, E>
     where
         R: Serialize,
@@ -122,7 +191,7 @@ impl DefaultNilauthClient {
         E: From<reqwest::Error> + From<RequestError>,
     {
         let response = self.client.post(url).json(&request).send().await?;
-        Self::parse_response(response).await
+        self.parse_response(response).await
     }
 
     async fn get<O, E>(&self, url: &str) -> Result<O, E>
@@ -131,7 +200,7 @@ impl DefaultNilauthClient {
         E: From<reqwest::Error> + From<RequestError>,
     {
         let response = self.client.get(url).send().await?;
-        Self::parse_response(response).await
+        self.parse_response(response).await
     }
 }
 
@@ -142,73 +211,81 @@ impl NilauthClient for DefaultNilauthClient {
         self.get(&url).await
     }
 
+    fn public_key(&self) -> [u8; 33] {
+        self.public_key
+    }
+
+    fn did(&self) -> Did {
+        self.did
+    }
+
+    fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
     async fn request_token(
         &self,
         signer: &dyn NucSigner,
         blind_module: BlindModule,
     ) -> Result<String, RequestTokenError> {
-        let about = self.about().await?;
-
-        let invocation =
-            create_identity_nuc(signer, Did::key(about.public_key), ["nil", "auth", "nucs", "create"]).await?;
+        let invocation = create_identity_nuc(signer, self.did, ["nil", "auth", "nucs", "create"]).await?;
 
         let header_value = format!("Bearer {invocation}");
         let url = self.make_url("/api/v1/nucs/create");
         let payload = CreateNucRequest { blind_module };
 
         let response = self.client.post(url).json(&payload).header("Authorization", header_value).send().await?;
-        let response: Result<CreateNucResponse, RequestTokenError> = Self::parse_response(response).await;
+        let response: Result<CreateNucResponse, RequestTokenError> = self.parse_response(response).await;
         Ok(response?.token)
     }
 
-    async fn pay_subscription(
+    fn create_payment_resource(
         &self,
-        payments_client: &mut NillionChainClient,
         blind_module: BlindModule,
-        payer_signer: &dyn NucSigner,
+        payer_did: Did,
         subscriber_did: Did,
-    ) -> Result<TxHash, PaySubscriptionError> {
-        let subscription = self.subscription_status(subscriber_did, blind_module).await?;
-        if let Some(details) = subscription.details
-            && details.renewable_at > Utc::now()
-        {
-            return Err(PaySubscriptionError::CannotRenewYet(details.renewable_at));
-        }
-
-        let about = self.about().await?;
-        let cost = self.subscription_cost(blind_module).await?;
+    ) -> PaymentResource {
         let payload = OnChainPaymentPayload {
-            service_public_key: about.public_key,
+            service_public_key: self.public_key,
             nonce: rand::random(),
             blind_module,
-            payer_did: *payer_signer.did(),
+            payer_did,
             subscriber_did,
+            chain_id: self.chain_id,
         };
 
-        let payload_bytes = serde_json::to_vec(&payload)?;
-        let hash = Sha256::digest(&payload_bytes);
-        info!("Making payment using payload={}, digest={}", String::from_utf8_lossy(&payload_bytes), hex::encode(hash));
+        // Use RFC 8785 canonical JSON serialization for consistent hashing
+        let payload_bytes = serde_jcs::to_vec(&payload).expect("payload serialization should not fail");
+        let digest: [u8; 32] = Sha256::digest(&payload_bytes).into();
 
-        let tx_hash_str = payments_client
-            .pay_for_resource(cost, hash.to_vec())
-            .await
-            .map_err(|e| PaySubscriptionError::Payment(e.to_string()))?;
+        info!(
+            "Created payment resource: payload={}, digest={}",
+            String::from_utf8_lossy(&payload_bytes),
+            hex::encode(digest)
+        );
 
+        PaymentResource { digest, payload }
+    }
+
+    async fn validate_payment(
+        &self,
+        tx_hash: &str,
+        payload: &OnChainPaymentPayload,
+        payer_signer: &dyn NucSigner,
+    ) -> Result<(), ValidatePaymentError> {
         let url = self.make_url("/api/v1/payments/validate");
-        let request = ValidatePaymentRequest { tx_hash: tx_hash_str.clone(), payload };
-        let tx_hash = TxHash(tx_hash_str);
+        let request = ValidatePaymentRequest { tx_hash: tx_hash.to_string(), payload: payload.clone() };
 
         // Authenticate the validation request with the Payer's identity Nuc.
-        let invocation =
-            create_identity_nuc(payer_signer, Did::key(about.public_key), ["nil", "auth", "payments", "validate"])
-                .await?;
+        let invocation = create_identity_nuc(payer_signer, self.did, ["nil", "auth", "payments", "validate"]).await?;
         let auth_header = format!("Bearer {invocation}");
 
         for delay in PAYMENT_TX_RETRIES {
             let response = self.client.post(&url).json(&request).header("Authorization", &auth_header).send().await?;
 
             if response.status().is_success() {
-                return Ok(tx_hash);
+                info!("Payment validated successfully: tx_hash={}", tx_hash);
+                return Ok(());
             }
 
             let error: RequestError = response.json().await?;
@@ -216,15 +293,12 @@ impl NilauthClient for DefaultNilauthClient {
                 warn!("Server could not validate payment, retrying in {delay:?}: {error:?}");
                 sleep(*delay).await;
             } else {
-                return Err(PaySubscriptionError::Request(error));
+                return Err(ValidatePaymentError::Request(error));
             }
         }
 
         // If all retries fail, return a specific error.
-        Err(PaySubscriptionError::PaymentValidation {
-            tx_hash,
-            payload: String::from_utf8_lossy(&payload_bytes).to_string(),
-        })
+        Err(ValidatePaymentError::RetriesExhausted { tx_hash: tx_hash.to_string() })
     }
 
     async fn subscription_status(
@@ -237,15 +311,14 @@ impl NilauthClient for DefaultNilauthClient {
         self.get(&url).await
     }
 
-    async fn subscription_cost(&self, blind_module: BlindModule) -> Result<TokenAmount, SubscriptionCostError> {
+    async fn subscription_cost(&self, blind_module: BlindModule) -> Result<u64, SubscriptionCostError> {
         let url = format!("/api/v1/payments/cost?blind_module={blind_module}");
         let url = self.make_url(&url);
         let response: Result<GetCostResponse, SubscriptionCostError> = self.get(&url).await;
-        Ok(TokenAmount::Unil(response?.cost_unils))
+        Ok(response?.cost_unils)
     }
 
     async fn revoke_token(&self, args: RevokeTokenArgs, signer: &dyn NucSigner) -> Result<(), RevokeTokenError> {
-        let about = self.about().await?;
         let RevokeTokenArgs { auth_token, revocable_token } = args;
 
         // The auth token's signatures must be validated before use.
@@ -261,7 +334,7 @@ impl NilauthClient for DefaultNilauthClient {
 
         let invocation = InvocationBuilder::extending(auth_token)
             .subject(*signer.did())
-            .audience(Did::key(about.public_key))
+            .audience(self.did)
             .command(["nuc", "revoke"])
             .arguments(json!({ "token": token_to_revoke }))
             .sign_and_serialize(signer)
@@ -274,7 +347,7 @@ impl NilauthClient for DefaultNilauthClient {
         let header_value = format!("Bearer {invocation}");
         let url = self.make_url("/api/v1/revocations/revoke");
         let response = self.client.post(url).header("Authorization", header_value).send().await?;
-        Self::parse_response(response).await
+        self.parse_response(response).await
     }
 
     async fn lookup_revoked_tokens(
@@ -313,21 +386,31 @@ struct ValidatePaymentRequest {
 }
 
 /// The plaintext payload that is hashed and stored on-chain.
-#[derive(Serialize, Deserialize, Clone)]
+///
+/// This payload is serialized using RFC 8785 canonical JSON and then hashed
+/// with SHA-256 to produce the digest sent to the BurnWithDigest contract.
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
-struct OnChainPaymentPayload {
+pub struct OnChainPaymentPayload {
     /// The public key of the nilauth service this payment is for.
     #[serde(with = "hex::serde")]
-    service_public_key: [u8; 33],
-    /// A random value to ensure the hash of this payload is unique
+    pub service_public_key: [u8; 33],
+
+    /// A random value to ensure the hash of this payload is unique.
     #[serde(with = "hex::serde")]
-    nonce: [u8; 16],
+    pub nonce: [u8; 16],
+
     /// The nillion blind module being subscribed to.
-    blind_module: BlindModule,
+    pub blind_module: BlindModule,
+
     /// The user paying for the subscription.
-    payer_did: Did,
+    pub payer_did: Did,
+
     /// The user the subscription is for.
-    subscriber_did: Did,
+    pub subscriber_did: Did,
+
+    /// The Ethereum chain ID this payment is for.
+    pub chain_id: u64,
 }
 
 /// The response body for the subscription cost endpoint.
